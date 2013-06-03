@@ -1,4 +1,5 @@
-\.beam
-\.boot
-\.script
-
+*.beam
+.*
+deps/*
+doc/*
+ebin/*
