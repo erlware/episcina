@@ -1,0 +1,8 @@
+{application, episcina,
+ [{description, "Erlang Connection Pool"},
+  {vsn, "semver"},
+  {modules, []},
+  {registered, [episcina_sup]},
+  {mod, {epna_app, []}},
+  {applications, [kernel, stdlib, gproc]},
+  {env, []}]}.
