@@ -1,9 +1,8 @@
-{application, epgsql_pool,
- [{description, "PostgreSQL Connection Pool"},
-  {vsn, "0.1"},
-  {modules, [epgsql_pool, pgsql_pool]},
-  {registered, [epgsql_pool]},
-  {mod, {epgsql_pool, []}},
-  {applications, [kernel, stdlib, epgsql]},
-  {included_applications, []},
-  {env, [{pools, []}]}]}.
+{application, episcina,
+ [{description, "Erlang Connection Pool"},
+  {vsn, "semver"},
+  {modules, []},
+  {registered, [episcina_sup]},
+  {mod, {epna_app, []}},
+  {applications, [kernel, stdlib, gproc]},
+  {env, []}]}.

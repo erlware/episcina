@@ -1,191 +1,271 @@
--module(pgsql_pool).
+%%%-------------------------------------------------------------------
+%%% @author Eric Merritt <ericbmerritt@gmail.com>
+%%% @copyright (C) Erlware, LLC.
+%%% @doc
+%%%  Provides the core pool implementation.
+%%% @end
+%%%-------------------------------------------------------------------
+-module(epna_pool).
 
--export([start_link/2, start_link/3, stop/1]).
--export([get_connection/1, get_connection/2, return_connection/2]).
--export([get_database/1]).
+%% API
+-export([start_link/5, stop/1,
+         get_connection/1, get_connection/2, return_connection/2]).
 
--export([init/1, code_change/3, terminate/2]). 
--export([handle_call/3, handle_cast/2, handle_info/2]).
+%% gen_server callbacks
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2,
+         terminate/2, code_change/3]).
 
--record(state, {id, size, connections, monitors, waiting, opts, timer}).
+-record(state, {id :: binary(),
+                size :: non_neg_integer(),
+                connections :: [{Connection::term(), Time::non_neg_integer()}],
+                working :: dict(),
+                waiting :: queue(),
+                connect_fun :: episcina:connect_fun(),
+                close_fun :: episcina:close_fun(),
+                timeout :: non_neg_integer(),
+                timer :: timer:tref()}).
 
- %% -- client interface --
+%%%===================================================================
+%%% Types
+%%%===================================================================
 
-opts(Opts) ->
-    Defaults = [{host, "localhost"},
-                {port, 5432},
-                {password, ""},
-                {username, os:getenv("USER")},
-                {database, "not_given"}],
-    Opts2 = lists:ukeysort(1, proplists:unfold(Opts)),
-    proplists:normalize(lists:ukeymerge(1, Opts2, Defaults), []).
+-type state() :: record(state).
 
+%%%===================================================================
+%%% API
+%%%===================================================================
 
-start_link(Size, Opts) ->
-    gen_server:start_link(?MODULE, {undefined, Size, opts(Opts)}, []).
+%% @doc This function starts up a new pool and registers it by
+%% name. That name will be used in future calls to interact with the
+%% pool.
+%%
+%% @param Name The name of the pool
+%% @param Size The maximum size of the pool. After this no further
+%% connections will be created and callers will have to wait for a
+%% connection to be freed.
+%% @param Timeout The maximum amount of time a caller is allowed to
+%% keep a connection before that connection is closed and considered
+%% invalid.
+%% @param ConnectFun A function that takes no arguments but returns a
+%% connection. This is used to create new connections in the system
+%% @param CloseFun A function that takes a connection as an argument
+%% and returns ok. This is expected to close the connection
+%% gracefully.
+-spec start_link(episcina:name(),
+                 Size::non_neg_integer(),
+                 Timeout::non_neg_integer(),
+                 episcina:connect_fun(),
+                 episcina:close_fun()) ->
+                        {ok, pid()} | {error, term()}.
+start_link(Name, Size, Timeout, ConnectFun, CloseFun) ->
+    gen_server:start_link(?MODULE, {Name, Size, Timeout, ConnectFun, CloseFun},
+                          []).
+-spec stop(episcina:name()) -> ok.
+stop(Name) ->
+    {Pid, _} = gproc:await(make_registered_name(Name)),
+    gen_server:cast(Pid, stop).
 
-start_link(undefined, Size, Opts) ->
-    start_link(Size, Opts);
-start_link(Name, Size, Opts) ->
-    gen_server:start_link({local, Name}, ?MODULE, {Name, Size, opts(Opts)}, []).
+-spec get_connection(episcina:name()) -> episcina:connection().
+get_connection(Name) ->
+    get_connection(Name, 10000).
 
-%% @doc Stop the pool, close all db connections
-stop(P) ->
-    gen_server:cast(P, stop).
-
-%% @doc Get a db connection, wait at most 10 seconds before giving up.
-get_connection(P) ->
-    get_connection(P, 10000).
-
-%% @doc Get a db connection, wait at most Timeout seconds before giving up.
-get_connection(P, Timeout) ->
-	try
-    	gen_server:call(P, get_connection, Timeout)
-	catch 
-		_:_ ->
-            gen_server:cast(P, {cancel_wait, self()}),
+-spec get_connection(episcina:name(), non_neg_integer()) -> episcina:connection().
+get_connection(Name, Timeout) ->
+    {Pid, _} = gproc:await(make_registered_name(Name)),
+    try
+        gen_server:call(Pid, get_connection, Timeout)
+    catch
+        _:_ ->
+            gen_server:cast(Pid, {cancel_wait, erlang:self()}),
             {error, timeout}
-	end.
+    end.
 
-%% @doc Return a db connection back to the connection pool.
-return_connection(P, C) ->
-    gen_server:cast(P, {return_connection, C}).
+return_connection(Name, C) ->
+    {Pid, _} = gproc:await(make_registered_name(Name)),
+    gen_server:cast(Pid, {return_connection, C}).
 
-%% @doc Return the name of the database used for the pool.
-get_database(P) ->
-    {ok, C} = get_connection(P),
-    {ok, Db} = pgsql_connection:database(C),
-    return_connection(P, C),
-    {ok, Db}.
+%%%===================================================================
+%%% gen_server callbacks
+%%%===================================================================
 
-%% -- gen_server implementation --
-
-init({Name, Size, Opts}) ->
-    process_flag(trap_exit, true),
-    Id = case Name of 
-			undefined -> self();
-			_Name -> Name
-		 end,
-    {ok, Connection} = connect(Opts),
-	{ok, TRef} = timer:send_interval(60000, close_unused),
-    State = #state{
-      id          = Id,
-      size        = Size,
-      opts        = Opts,
-      connections = [{Connection, now_secs()}],
-      monitors    = [],
-      waiting     = queue:new(),
-      timer       = TRef},
+%% @private
+init({Name, Size, Timeout, ConnectFun, CloseFun}) ->
+    erlang:process_flag(trap_exit, true),
+    Id = case Name of
+             undefined ->
+                 erlang:self();
+             _Name -> Name
+         end,
+    {ok, Connection} = connect(ConnectFun),
+    {ok, TRef} = timer:send_interval(60000, close_unused),
+    State = #state{id = Id,
+                   size = Size,
+                   connections = [{Connection, now_secs()}],
+                   working = dict:new(),
+                   timeout = Timeout,
+                   connect_fun = ConnectFun,
+                   close_fun = CloseFun,
+                   waiting = queue:new(),
+                   timer = TRef},
+    gproc:reg(make_registered_name(Name), erlang:self()),
     {ok, State}.
 
-%% Requestor wants a connection. When available then immediately return, otherwise add to the waiting queue.
-handle_call(get_connection, From, #state{connections = Connections, waiting = Waiting} = State) ->
+%% @private
+handle_call(get_connection, From,
+            #state{connections = Connections,
+                   waiting = Waiting,
+                   connect_fun = ConnectFun} = State) ->
+    %% Requestor wants a connection. When available then immediately
+    %% return, otherwise add to the waiting queue.
     case Connections of
-        [{C,_} | T] -> 
-			% Return existing unused connection
-			{noreply, deliver(From, C, State#state{connections = T})};
+        [{C,_} | T] ->
+            %% Return existing unused connection
+            {noreply, deliver(From, C, State#state{connections = T})};
         [] ->
-			case length(State#state.monitors) < State#state.size of
-				true ->
-					% Allocate a new connection and return it.
-					{ok, C} = connect(State#state.opts),
-				    {noreply, deliver(From, C, State)};
-				false ->
-					% Reached max connections, let the requestor wait
-	 				{noreply, State#state{waiting = queue:in(From, Waiting)}}
-			end
+            case dict:size(State#state.working) < State#state.size of
+                true ->
+                    %% Allocate a new connection and return it.
+                    {ok, C} = connect(ConnectFun),
+                    {noreply, deliver(From, C, State)};
+                false ->
+                    %% Reached max connections, let the requestor wait
+                    {noreply, State#state{waiting = queue:in(From, Waiting)}}
+            end
     end;
-
-%% Trap unsupported calls
 handle_call(Request, _From, State) ->
+    %% Trap unsupported calls
     {stop, {unsupported_call, Request}, State}.
 
-%% Connection returned from the requestor, back into our pool.  Demonitor the requestor.
-handle_cast({return_connection, C}, #state{monitors = Monitors} = State) ->
-    case lists:keytake(C, 1, Monitors) of
-        {value, {C, M}, Monitors2} ->
-            erlang:demonitor(M),
-            {noreply, return(C, State#state{monitors = Monitors2})};
-        false ->
-            {noreply, State}
-    end;
-
-%% Requestor gave up (timeout), remove from our waiting queue (if any).
-handle_cast({cancel_wait, Pid}, #state{waiting = Waiting} = State) ->
+%% @private
+handle_cast({return_connection, C}, State0) ->
+    %% Connection returned from the requestor, back into our pool.
+    State1 = cleanup_connection(C, State0),
+    {noreply, return(C, State1)};
+handle_cast({cancel_wait, Pid}, State = #state{waiting = Waiting}) ->
+    %% Requestor gave up (timeout), remove from our waiting queue (if any).
     Waiting2 = queue:filter(fun({QPid, _Tag}) -> QPid =/= Pid end, Waiting),
     {noreply, State#state{waiting = Waiting2}};
-
-%% Stop the connections pool.
 handle_cast(stop, State) ->
+    %% Stop the connections pool.
     {stop, normal, State};
-
-%% Trap unsupported casts
 handle_cast(Request, State) ->
     {stop, {unsupported_cast, Request}, State}.
 
-%% Close all connections that are unused for longer than a minute.
-handle_info(close_unused, State) ->
-	Old = now_secs() - 60,
-	{Unused, Used} = lists:partition(fun({_C,Time}) -> Time < Old end, State#state.connections),
-	[ pgsql:close(C) || {C,_} <- Unused ],
-	{noreply, State#state{connections=Used}};
-
-%% Requestor we are monitoring went down. Kill the associated connection, as it might be in an unknown state.
-handle_info({'DOWN', M, process, _Pid, _Info}, #state{monitors = Monitors} = State) ->
-    case lists:keytake(M, 2, Monitors) of
-        {value, {C, M}, Monitors2} ->
-			pgsql:close(C),
-            {noreply, State#state{monitors = Monitors2}};
-        false ->
-            {noreply, State}
-    end;
-
-%% One of our database connections went down. Clean up our administration.
-handle_info({'EXIT', ConnectionPid, _Reason}, State) ->
-    #state{connections = Connections, monitors = Monitors} = State,
-    Connections2 = proplists:delete(ConnectionPid, Connections),
-    F = fun({C, M}) when C == ConnectionPid -> erlang:demonitor(M), false;
-           ({_, _}) -> true
-        end,
-    Monitors2 = lists:filter(F, Monitors),
-    {noreply, State#state{connections = Connections2, monitors = Monitors2}};
-
-%% Trap unsupported info calls.
+%% @private
+handle_info(close_unused, State = #state{close_fun = CloseFun}) ->
+    %% Close all connections that are unused for longer than a minute.
+    Old = now_secs() - 60,
+    {Unused, Used} = lists:partition(fun({_C,Time}) ->
+                                             Time < Old
+                                     end,
+                                     State#state.connections),
+    lists:foreach(fun({C,_}) ->
+                          CloseFun(C)
+                  end, Unused),
+    {noreply, State#state{connections=Used}};
+handle_info({connection_timeout, C}, State0 = #state{close_fun=CloseFun,
+                                                     working=Working}) ->
+    %% We got a connection timeout. So lets remove the connection
+    %% stuff and close the connection
+    case dict:find(C, Working) of
+        error ->
+            {noreply, State0};
+        {ok, {_, _, Pid}} ->
+            State1 = cleanup_connection(C, State0),
+            %% The connection is no longer good, the process running
+            %% the connection shouldn't do anything else with it. So
+            %% we go ahead and tell it to exit with a reasonable
+            %% message.
+            erlang:exit(Pid, connection_timeout),
+            ok = CloseFun(C),
+            {noreply, State1}
+        end;
+handle_info({'DOWN', _M, process, _Pid, _Info},
+            State0 = #state{close_fun = CloseFun,
+                            working = Working}) ->
+    %% Requestor we are monitoring went down. Kill the associated
+    %% connection, as it might be in an unknown state.
+    {noreply,
+     dict:fold(fun(C, {_, _, _}, State1) ->
+                       CloseFun(C),
+                       cleanup_connection(C, State1);
+                  (_, _, State1) ->
+                       State1
+               end, State0, Working)};
+handle_info({'EXIT', ConnectionPid, _Reason},
+            State0 = #state{connections = Connections0}) ->
+    %% One of our database connections went down. Clean up our
+    %% administration.
+    Connections1 = proplists:delete(ConnectionPid, Connections0),
+    State1 = cleanup_connection(ConnectionPid, State0),
+    {noreply, State1#state{connections = Connections1}};
 handle_info(Info, State) ->
+    %% Trap unsupported info calls.
     {stop, {unsupported_info, Info}, State}.
 
+%% @private
 terminate(_Reason, State) ->
-	timer:cancel(State#state.timer),
+        timer:cancel(State#state.timer),
     ok.
 
+%% @private
 code_change(_OldVsn, State, _Extra) ->
     State.
 
-%% -- internal functions --
-
-connect(Opts) ->
-    Host     = proplists:get_value(host, Opts),
-    Username = proplists:get_value(username, Opts),
-    Password = proplists:get_value(password, Opts),
-    pgsql:connect(Host, Username, Password, Opts).
-
-deliver({Pid,_Tag} = From, C, #state{monitors=Monitors} = State) ->
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
+-spec deliver({pid(), term()}, episcina:connection(), state()) -> state().
+deliver(From = {Pid, _}, C, State = #state{working=Working, timeout=Timeout}) ->
     M = erlang:monitor(process, Pid),
-	gen_server:reply(From, {ok, C}),
-	State#state{ monitors=[{C, M} | Monitors] }.
+    gen_server:reply(From, {ok, C}),
+    {ok, Tref} = timer:send_after(Timeout, {connection_timeout, C}),
+    State#state{working=dict:store(C, {M, Tref, Pid}, Working)}.
 
-return(C, #state{connections = Connections, waiting = Waiting} = State) ->
-    case queue:out(Waiting) of
-        {{value, From}, Waiting2} ->
-            State2 = deliver(From, C, State),
-            State2#state{waiting = Waiting2};
-        {empty, _Waiting} ->
-            Connections2 = [{C, now_secs()} | Connections],
-            State#state{connections = Connections2}
+-spec return(episcina:connection(), state()) -> state().
+return(C, State0 = #state{connections = Connections, waiting = Waiting}) ->
+    State1 = cleanup_connection(C, State0),
+    case proplists:is_defined(C, Connections) of
+        true ->
+            %% Its been returned twice, nothing to do here then
+            State1;
+        false ->
+            case queue:out(Waiting) of
+                {{value, From}, Waiting2} ->
+                    State2 = deliver(From, C, State1),
+                    State2#state{waiting = Waiting2};
+                {empty, _Waiting} ->
+                    Connections2 = [{C, now_secs()} | Connections],
+                    State1#state{connections = Connections2}
+            end
     end.
 
+-spec cleanup_connection(episcina:connection(), state()) -> state().
+cleanup_connection(C, State = #state{working=Working}) ->
+    case dict:find(C, Working) of
+        error ->
+            State;
+        {ok, {M, TimeoutRef, _Pid}} ->
+            erlang:demonitor(M),
+            timer:cancel(TimeoutRef),
+            State#state{working = dict:erase(C, Working)}
+    end.
 
 %% Return the current time in seconds, used for timeouts.
+-spec now_secs() -> non_neg_integer().
 now_secs() ->
     {M,S,_M} = erlang:now(),
     M*1000 + S.
+
+-spec make_registered_name(episcina:name()) -> term().
+make_registered_name(Name) ->
+    {n, l, {epna_pool, Name}}.
+
+-spec connect(episcina:connect_fun()) -> episcina:connection().
+connect(Fun) ->
+    Result = {ok, C} = Fun(),
+    if
+        erlang:is_pid(C) ->
+            erlang:link(C)
+    end,
+    Result.

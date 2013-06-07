@@ -1,45 +1,100 @@
-NAME		:= epgsql_pool
-VERSION		:= 0.1
+# Copyright 2012 Erlware, LLC. All Rights Reserved.
+#
+# This file is provided to you under the Apache License,
+# Version 2.0 (the "License"); you may not use this file
+# except in compliance with the License.  You may obtain
+# a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
 
-ERL  		:= erl
-ERLC 		:= erlc
+ERLFLAGS= -pa $(CURDIR)/.eunit -pa $(CURDIR)/ebin -pa $(CURDIR)/deps/*/ebin
 
-EPGSQL_EBIN	:= ~/src/epgsql/ebin
+DEPS_PLT=$(CURDIR)/.deps_plt
+DEPS=erts kernel stdlib
 
-# ------------------------------------------------------------------------
+# =============================================================================
+# Verify that the programs we need to run are installed on this system
+# =============================================================================
+ERL = $(shell which erl)
 
-ERLC_FLAGS	:= -Wall 
+ifeq ($(ERL),)
+$(error "Erlang not available on this system")
+endif
 
-SRC			:= $(wildcard src/*.erl)
-TESTS 		:= $(wildcard test_src/*.erl)
-RELEASE		:= $(NAME)-$(VERSION).tar.gz
+REBAR=$(shell which rebar)
 
-APPDIR		:= $(NAME)-$(VERSION)
-BEAMS		:= $(SRC:src/%.erl=ebin/%.beam) 
+ifeq ($(REBAR),)
+$(error "Rebar not available on this system")
+endif
 
-compile: $(BEAMS)
+.PHONY: all compile doc clean test dialyzer typer shell distclean pdf \
+  update-deps clean-common-test-data rebuild
 
-app: compile
-	@mkdir -p $(APPDIR)/ebin
-	@cp -r ebin/* $(APPDIR)/ebin/
+all: deps compile dialyzer test
 
-release: app
-	@tar czvf $(RELEASE) $(APPDIR)
+# =============================================================================
+# Rules to build the system
+# =============================================================================
+
+deps:
+	$(REBAR) get-deps
+	$(REBAR) compile
+
+update-deps:
+	$(REBAR) update-deps
+	$(REBAR) compile
+
+compile:
+	$(REBAR) skip_deps=true compile
+
+doc:
+	$(REBAR) skip_deps=true doc
+
+eunit: compile clean-common-test-data
+	$(REBAR) skip_deps=true eunit
+
+test: compile eunit
+
+$(DEPS_PLT):
+	@echo Building local plt at $(DEPS_PLT)
+	@echo
+	- dialyzer --output_plt $(DEPS_PLT) --build_plt \
+	   --apps $(DEPS) -r deps
+
+dialyzer: $(DEPS_PLT)
+	dialyzer --fullpath --plt $(DEPS_PLT) -Wrace_conditions -r ./ebin
+
+typer:
+	typer --plt $(DEPS_PLT) -r ./src
+
+shell: deps compile
+# You often want *rebuilt* rebar tests to be available to the
+# shell you have to call eunit (to get the tests
+# rebuilt). However, eunit runs the tests, which probably
+# fails (thats probably why You want them in the shell). This
+# runs eunit but tells make to ignore the result.
+	- @$(REBAR) skip_deps=true eunit
+	@$(ERL) $(ERLFLAGS)
+
+pdf:
+	pandoc README.md -o README.pdf
 
 clean:
-	@rm -f ebin/*.beam
-	@rm -rf $(NAME)-$(VERSION) $(NAME)-*.tar.gz
+	- rm -rf $(CURDIR)/test/*.beam
+	- rm -rf $(CURDIR)/logs
+	- rm -rf $(CURDIR)/ebin
+	$(REBAR) skip_deps=true clean
 
-test: $(TESTS:test_src/%.erl=test_ebin/%.beam) $(BEAMS)
-	$(ERL) -pa $(EPGSQL_EBIN) -pa ebin/ -pa test_ebin/ -noshell -s pgsql_pool_tests test -s init stop
+distclean: clean
+	- rm -rf $(DEPS_PLT)
+	- rm -rvf $(CURDIR)/deps
 
-# ------------------------------------------------------------------------
-
-.SUFFIXES: .erl .beam
-.PHONY:    app compile clean test
-
-ebin/%.beam : src/%.erl
-	$(ERLC) $(ERLC_FLAGS) -o $(dir $@) $<
-
-test_ebin/%.beam : test_src/%.erl
-	$(ERLC) $(ERLC_FLAGS) -o $(dir $@) $<
+rebuild: distclean deps compile escript dialyzer test
