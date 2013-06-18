@@ -97,4 +97,4 @@ distclean: clean
 	- rm -rf $(DEPS_PLT)
 	- rm -rvf $(CURDIR)/deps
 
-rebuild: distclean deps compile escript dialyzer test
+rebuild: distclean deps compile dialyzer test
