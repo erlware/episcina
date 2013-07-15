@@ -69,7 +69,7 @@ $(DEPS_PLT):
 	- dialyzer --output_plt $(DEPS_PLT) --build_plt \
 	   --apps $(DEPS) -r deps
 
-dialyzer: $(DEPS_PLT)
+dialyzer: test $(DEPS_PLT)
 	dialyzer --fullpath --plt $(DEPS_PLT) -Wrace_conditions -r ./ebin
 
 typer:
