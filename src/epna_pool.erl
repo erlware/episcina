@@ -180,25 +180,16 @@ handle_info({connection_timeout, C}, State0 = #state{close_fun=CloseFun,
             ok = CloseFun(C),
             {noreply, State1}
         end;
-handle_info({'DOWN', _M, process, _Pid, _Info},
-            State0 = #state{close_fun = CloseFun,
-                            working = Working}) ->
-    %% Requestor we are monitoring went down. Kill the associated
-    %% connection, as it might be in an unknown state.
-    {noreply,
-     dict:fold(fun(C, {_, _, _}, State1) ->
-                       CloseFun(C),
-                       cleanup_connection(C, State1);
-                  (_, _, State1) ->
-                       State1
-               end, State0, Working)};
-handle_info({'EXIT', ConnectionPid, _Reason},
+
+handle_info({'EXIT', Pid, _Reason},
             State0 = #state{connections = Connections0}) ->
-    %% One of our database connections went down. Clean up our
-    %% administration.
-    Connections1 = proplists:delete(ConnectionPid, Connections0),
-    State1 = cleanup_connection(ConnectionPid, State0),
-    {noreply, State1#state{connections = Connections1}};
+    State1 = case proplists:is_defined(Pid, Connections0) of
+                 true ->
+                     connection_exit(Pid, Connections0, State0);
+                 false ->
+                     external_owner_exit(Pid, State0)
+             end,
+        {noreply, State1};
 handle_info(Info, State) ->
     %% Trap unsupported info calls.
     {stop, {unsupported_info, Info}, State}.
@@ -215,12 +206,37 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+external_owner_exit(Pid, State0 = #state{close_fun = CloseFun,
+                                         working = Working}) ->
+    %% Requestor we are monitoring went down. Kill the associated
+    %% connection, as it might be in an unknown state.
+    dict:fold(fun(C, {_, PossiblePid}, State1) ->
+                      case Pid of
+                          PossiblePid ->
+                              CloseFun(C),
+                              cleanup_connection(C, State1);
+                          _ ->
+                              State1
+                      end;
+                 (_, _, State1) ->
+                      State1
+              end, State0, Working).
+
+
+connection_exit(ConnectionPid, Connections0, State0) ->
+    %% One of our database connections went down. Clean up our
+    %% administration.
+    Connections1 = proplists:delete(ConnectionPid, Connections0),
+    State1 = cleanup_connection(ConnectionPid, State0),
+    State1#state{connections = Connections1}.
+
+
 -spec deliver({pid(), term()}, episcina:connection(), state()) -> state().
 deliver(From = {Pid, _}, C, State = #state{working=Working, timeout=Timeout}) ->
-    M = erlang:monitor(process, Pid),
+    erlang:link(Pid),
     gen_server:reply(From, {ok, C}),
     {ok, Tref} = timer:send_after(Timeout, {connection_timeout, C}),
-    State#state{working=dict:store(C, {M, Tref, Pid}, Working)}.
+    State#state{working=dict:store(C, {Tref, Pid}, Working)}.
 
 -spec return(episcina:connection(), state()) -> state().
 return(C, State0 = #state{connections = Connections, waiting = Waiting}) ->
@@ -245,8 +261,8 @@ cleanup_connection(C, State = #state{working=Working}) ->
     case dict:find(C, Working) of
         error ->
             State;
-        {ok, {M, TimeoutRef, _Pid}} ->
-            erlang:demonitor(M),
+        {ok, {TimeoutRef, Pid}} ->
+            erlang:unlink(Pid),
             timer:cancel(TimeoutRef),
             State#state{working = dict:erase(C, Working)}
     end.
