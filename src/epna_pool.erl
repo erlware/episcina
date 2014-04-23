@@ -15,6 +15,17 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
+-ifdef(namespaced_types).
+-record(state, {id :: binary(),
+                size :: non_neg_integer(),
+                connections :: [{Connection::term(), Time::non_neg_integer()}],
+                working :: dict:dict(),
+                waiting :: queue:queue(),
+                connect_fun :: episcina:connect_fun(),
+                close_fun :: episcina:close_fun(),
+                timeout :: non_neg_integer(),
+                timer :: timer:tref()}).
+-else.
 -record(state, {id :: binary(),
                 size :: non_neg_integer(),
                 connections :: [{Connection::term(), Time::non_neg_integer()}],
@@ -24,6 +35,7 @@
                 close_fun :: episcina:close_fun(),
                 timeout :: non_neg_integer(),
                 timer :: timer:tref()}).
+-endif.
 
 %%%===================================================================
 %%% Types
