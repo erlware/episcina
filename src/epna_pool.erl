@@ -182,7 +182,7 @@ handle_info({connection_timeout, C}, State0 = #state{close_fun=CloseFun,
     case dict:find(C, Working) of
         error ->
             {noreply, State0};
-        {ok, {_, _, Pid}} ->
+        {ok, {_TRef, Pid}} ->
             State1 = cleanup_connection(C, State0),
             %% The connection is no longer good, the process running
             %% the connection shouldn't do anything else with it. So
