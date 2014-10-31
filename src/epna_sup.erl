@@ -35,10 +35,11 @@ start_pool(Name, Size, Timeout, ConnectFun, CloseFun) ->
 %%@private
 init([]) ->
     RestartStrategy = simple_one_for_one,
-    MaxRestarts = 1000,
-    MaxSecondsBetweenRestarts = 3600,
 
-    SupFlags = {RestartStrategy, MaxRestarts, MaxSecondsBetweenRestarts},
+    MaxR = application:get_env(episcina, max_restarts, 1000),
+    MaxT = application:get_env(episcina, max_seconds_between_restarts, 3600),
+
+    SupFlags = {RestartStrategy, MaxR, MaxT},
 
     Restart = permanent,
     Shutdown = 2000,

@@ -26,9 +26,19 @@ connect. There are several parameters that are required.
   name of the function and any arguments needed to be passed to that
   function. There is an example below.
 
+episcina also has two optional parameters:
+
+* `max_restarts`: the number of restarts that are allowed
+  to occur within `max_seconds_between_restarts` seconds. (Default: 1000)
+* `max_seconds_between_restarts`: If more than `max_restarts` restarts
+  occur within `max_seconds_between_restarts` seconds, the episcina supervisor
+  will terminate all its child processes, then itself. (Default: 3600)
+
 #### sys.config file example:
 
-    {episcina, [{pools, [{db1,
+{episcina, [{max_restarts, 2000},
+            {max_seconds_between_restarts, 7200},
+            {pools, [{db1,
                           [{size, 10},
                            {timeout, 10000},
                            {connect_provider, {pgsql, connect,
