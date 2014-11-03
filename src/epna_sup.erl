@@ -36,8 +36,8 @@ start_pool(Name, Size, Timeout, ConnectFun, CloseFun) ->
 init([]) ->
     RestartStrategy = simple_one_for_one,
 
-    MaxR = application:get_env(episcina, max_restarts, 1000),
-    MaxT = application:get_env(episcina, max_seconds_between_restarts, 3600),
+    MaxR = get_env(max_restarts, 1000),
+    MaxT = get_env(max_seconds_between_restarts, 3600),
 
     SupFlags = {RestartStrategy, MaxR, MaxT},
 
@@ -53,3 +53,11 @@ init([]) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+get_env(Key, Default) ->
+    case application:get_env(episcina, Key) of
+        undefined ->
+            Default;
+        {ok, Value} ->
+            Value
+    end.
