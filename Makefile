@@ -35,10 +35,15 @@ ifeq ($(REBAR),)
 $(error "Rebar not available on this system")
 endif
 
+ALL = deps compile
+ifeq ($(MAKELEVEL),0)
+ALL += dialyzer test
+endif
+
 .PHONY: all compile doc clean test dialyzer typer shell distclean pdf \
   update-deps clean-common-test-data rebuild
 
-all: deps compile dialyzer test
+all: $(ALL)
 
 # =============================================================================
 # Rules to build the system
