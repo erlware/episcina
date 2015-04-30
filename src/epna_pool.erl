@@ -83,9 +83,11 @@ get_connection(Name) ->
 
 -spec get_connection(episcina:name(), non_neg_integer()) -> episcina:connection().
 get_connection(Name, Timeout) ->
-    {Pid, _} = gproc:await(make_registered_name(Name)),
+    {Time, {Pid, _}} = timer:tc(gproc, await, [make_registered_name(Name),
+                                               Timeout]),
+    Timeout1 = Timeout - trunc(Time/1000),
     try
-        gen_server:call(Pid, get_connection, Timeout)
+        gen_server:call(Pid, get_connection, Timeout1)
     catch
         _:_ ->
             gen_server:cast(Pid, {cancel_wait, erlang:self()}),
