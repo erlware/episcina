@@ -1,15 +1,15 @@
-EPiscina - A Simple Erlang Connection Pool
+Episcina - A Simple Erlang Connection Pool
 ==========================================
 
-episcina is designed as a pool for resources. Generally those
+Episcina is designed as a pool for resources. Generally those
 resources are expected to be connections to some type of external
 thing like a sql system. However, there is nothing sql specific about
-EPiscina. You may generally consider it a small very focused pool
+episcina. You may generally consider it a small very focused pool
 implementation that does not try to take ownership of your work.
 
 How It Works
 ------------
-episcina will create any pools defined in the episcina's 'pools'
+Episcina will create any pools defined in the episcina's 'pools'
 environment parameter, which is a proplist that tells episcina how to
 connect. There are several parameters that are required.
 
@@ -26,7 +26,7 @@ connect. There are several parameters that are required.
   name of the function and any arguments needed to be passed to that
   function. There is an example below.
 
-episcina also has two optional parameters:
+Episcina also has two optional parameters:
 
 * `max_restarts`: the number of restarts that are allowed
   to occur within `max_seconds_between_restarts` seconds. (Default: 1000)
@@ -36,6 +36,7 @@ episcina also has two optional parameters:
 
 #### sys.config file example:
 
+```erlang
 {episcina, [{max_restarts, 2000},
             {max_seconds_between_restarts, 7200},
             {pools, [{db1,
@@ -48,23 +49,28 @@ episcina also has two optional parameters:
                                                 "postgresql",
                                                 [{database, "foobar"}]]}},
                            {close_provider, {pgsql, close, []}}]}]}]}.
-
+```
 
 
 Pool Usage
 ----------
 
-    {ok, C} = episcina:get_connection(Pool, Timeout).
+```erlang
+{ok, C} = episcina:get_connection(Pool, Timeout).
+```
 
 * `Pool` - Name of pool.
 * `Timeout` - Time, in milliseconds, to wait for a free connection.
 
-    ok = episcina:return_connection(Pool, Connection).
+```erlang
+ok = episcina:return_connection(Pool, Connection).
+```
+
 
 Details
 -------
 
-* episcina monitors the process which called get_connection and returns the
+* Episcina monitors the process which called `get_connection` and returns the
 allocated connection to the pool if that process dies.
 * If a connection dies, a new one is created and added to the pool in
 its place.
