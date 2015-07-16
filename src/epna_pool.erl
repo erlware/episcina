@@ -41,7 +41,7 @@
 %%% Types
 %%%===================================================================
 
--type state() :: record(state).
+-type state() :: #state{}.
 
 %%%===================================================================
 %%% API
@@ -284,8 +284,17 @@ cleanup_connection(C, State = #state{working=Working}) ->
 %% Return the current time in seconds, used for timeouts.
 -spec now_secs() -> non_neg_integer().
 now_secs() ->
-    {M,S,_M} = erlang:now(),
-    M*1000 + S.
+    try
+        %% use apply/3 because otherwise cover compilation
+        %% fails on < 18.0
+        apply(erlang, monotonic_time, [seconds])
+    catch
+        error:undef ->
+            %% use apply/3 because otherwise the compiler
+            %% warns in 18.0+
+            {M,S,_M} = apply(erlang, now, []),
+            M*1000 + S
+    end.
 
 -spec make_registered_name(episcina:name()) -> term().
 make_registered_name(Name) ->
