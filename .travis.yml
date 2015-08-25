@@ -1,3 +1,4 @@
+sudo: false
 language: erlang
 otp_release:
        - 18.0
@@ -6,7 +7,11 @@ otp_release:
        - R15B02
        - R15B01
        - R15B
-script: "make rebuild"
+cache:
+  directories:
+  - $HOME/.cache/rebar3/hex/default/
+install: "true" # don't let travis run get-deps
+script: "./rebar3 update && ./rebar3 eunit && ./rebar3 dialyzer"
 branches:
         only:
                 - master
