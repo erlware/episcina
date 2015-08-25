@@ -1,6 +1,6 @@
 {application, episcina,
  [{description, "Erlang Connection Pool"},
-  {vsn, "semver"},
+  {vsn, "1.1.0"},
   {modules, []},
   {registered, [episcina_sup]},
   {mod, {epna_app, []}},
