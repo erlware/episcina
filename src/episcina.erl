@@ -20,7 +20,7 @@
               connect_fun/0,
               close_fun/0]).
 
--type name() :: binary() | atom().
+-type name() :: any().
 -type connection() :: pid() | term().
 -type connect_fun() :: fun(() -> term()).
 -type close_fun() :: fun((term()) -> ok).
