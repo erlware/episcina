@@ -77,11 +77,11 @@ stop(Name) ->
     {Pid, _} = gproc:await(make_registered_name(Name)),
     gen_server:cast(Pid, stop).
 
--spec get_connection(episcina:name()) -> episcina:connection().
+-spec get_connection(episcina:name()) -> {ok, episcina:connection()}.
 get_connection(Name) ->
     get_connection(Name, 10000).
 
--spec get_connection(episcina:name(), non_neg_integer()) -> episcina:connection().
+-spec get_connection(episcina:name(), non_neg_integer()) -> {ok, episcina:connection()}.
 get_connection(Name, Timeout) ->
     {Time, {Pid, _}} = timer:tc(gproc, await, [make_registered_name(Name),
                                                Timeout]),
@@ -94,6 +94,7 @@ get_connection(Name, Timeout) ->
             {error, timeout}
     end.
 
+-spec return_connection(episcina:name(), episcina:connection()) -> ok.
 return_connection(Name, C) ->
     {Pid, _} = gproc:await(make_registered_name(Name)),
     gen_server:cast(Pid, {return_connection, C}).

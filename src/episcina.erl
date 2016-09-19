@@ -58,13 +58,13 @@ stop(Name) ->
     epna_pool:stop(Name).
 
 %% @doc Get a db connection, wait at most 10 seconds before giving up.
--spec get_connection(name()) -> connection().
+-spec get_connection(name()) -> {ok, connection()}.
 get_connection(Name) ->
     epna_pool:get_connection(Name).
 
 %% @doc Get a db connection, wait at most Timeout seconds before
 %% giving up.
--spec get_connection(name(), non_neg_integer()) -> connection().
+-spec get_connection(name(), non_neg_integer()) -> {ok, connection()}.
 get_connection(Name, Timeout) ->
     epna_pool:get_connection(Name, Timeout).
 
